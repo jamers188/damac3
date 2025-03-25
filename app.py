@@ -3,7 +3,12 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
-from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings  # , HuggingFaceInstructEmbeddings
+# Other imports that will need to be updated:
+from langchain_openai import ChatOpenAI  # instead of langchain.chat_models
+from langchain_community.vectorstores import FAISS, Qdrant, Chroma  # instead of langchain.vectorstores
+from langchain.memory import ConversationBufferMemory  # this one might still be in the core package
+from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline  # instead of langchain.llms
+from langchain.chains import ConversationalRetrievalChain  # this might still be in the core package
 from langchain.vectorstores import FAISS, Qdrant, Chroma
 from langchain.chat_models import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
