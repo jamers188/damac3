@@ -7,6 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.llms import HuggingFacePipeline
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+from langchain.prompts import PromptTemplate
 from htmlTemplates import css, bot_template, user_template
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 
@@ -57,8 +58,8 @@ def get_vectorstore(text_chunks):
 
 # get conversation chain method
 def get_conversation_chain(vectorstore):
-    # Use a lightweight model that should work on Streamlit Cloud
-    model_id = "google/flan-t5-small"  # A smaller model that should run on most systems
+    # Use a better model that should still work on Streamlit Cloud
+    model_id = "google/flan-t5-base"  # Better quality than small but still reasonable size
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
     
@@ -66,7 +67,10 @@ def get_conversation_chain(vectorstore):
         "text2text-generation",
         model=model, 
         tokenizer=tokenizer, 
-        max_length=512
+        max_length=512,
+        temperature=0.7,  # Add some temperature for more detailed responses
+        top_p=0.95,       # Using nucleus sampling for better quality
+        do_sample=True    # Enable sampling for more diverse outputs
     )
     
     llm = HuggingFacePipeline(pipeline=pipe)
@@ -76,10 +80,33 @@ def get_conversation_chain(vectorstore):
     memory = ConversationBufferMemory(
         memory_key='chat_history', return_messages=True)
 
+    # Create a custom prompt template to help the model generate better responses
+    template = """
+    You are a helpful assistant that answers questions based on the provided documents.
+    
+    Context information from documents:
+    {context}
+    
+    Chat History:
+    {chat_history}
+    
+    Question: {question}
+    
+    Please provide a comprehensive, detailed answer based on the information in the documents:
+    """
+    
+    QA_PROMPT = PromptTemplate(
+        input_variables=["context", "chat_history", "question"],
+        template=template
+    )
+    
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vectorstore.as_retriever(),
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),  # Retrieve more context
         memory=memory,
+        combine_docs_chain_kwargs={"prompt": QA_PROMPT},
+        return_source_documents=True,
+        verbose=True
     )
     print("Conversation chain created")
     return conversation_chain
@@ -89,16 +116,24 @@ def get_conversation_chain(vectorstore):
 def handle_userinput(user_question):
     if st.session_state.conversation is not None:
         try:
-            response = st.session_state.conversation({'question': user_question})
-            st.session_state.chat_history = response['chat_history']
+            # Add prefixes to encourage more detailed answers
+            enhanced_question = f"Based on the documents provided, please give a detailed answer to this question: {user_question}"
+            
+            with st.spinner("Generating response... This may take a moment."):
+                response = st.session_state.conversation({'question': enhanced_question})
+                st.session_state.chat_history = response['chat_history']
 
-            for i, message in enumerate(st.session_state.chat_history):
-                if i % 2 == 0:
-                    st.write(user_template.replace(
-                        "{{MSG}}", message.content), unsafe_allow_html=True)
-                else:
-                    st.write(bot_template.replace(
-                        "{{MSG}}", message.content), unsafe_allow_html=True)
+                for i, message in enumerate(st.session_state.chat_history):
+                    if i % 2 == 0:
+                        st.write(user_template.replace(
+                            "{{MSG}}", message.content), unsafe_allow_html=True)
+                    else:
+                        content = message.content
+                        # Check if response is too short or unhelpful
+                        if len(content.split()) < 5:
+                            content += "\n\n(Note: The model provided a very brief response. Try rephrasing your question or uploading more detailed documents for better results.)"
+                        st.write(bot_template.replace(
+                            "{{MSG}}", content), unsafe_allow_html=True)
         except Exception as e:
             st.error(f"An error occurred while processing your question: {str(e)}")
             st.info("Try asking a simpler question or processing different documents.")
