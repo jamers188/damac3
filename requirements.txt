@@ -3,11 +3,8 @@ python-dotenv
 PyPDF2
 langchain
 langchain-community
-langchain-openai
 faiss-cpu
-openai
-tiktoken
 sentence-transformers
 transformers
-torch
 accelerate
+torch
