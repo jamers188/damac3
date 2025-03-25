@@ -105,7 +105,7 @@ def get_conversation_chain(vectorstore):
         retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),  # Retrieve more context
         memory=memory,
         combine_docs_chain_kwargs={"prompt": QA_PROMPT},
-        return_source_documents=True,
+        return_source_documents=False,  # Don't return source documents to avoid memory conflict
         verbose=True
     )
     print("Conversation chain created")
@@ -121,19 +121,43 @@ def handle_userinput(user_question):
             
             with st.spinner("Generating response... This may take a moment."):
                 response = st.session_state.conversation({'question': enhanced_question})
-                st.session_state.chat_history = response['chat_history']
+                # Check if chat_history exists in the response
+                if 'chat_history' in response:
+                    st.session_state.chat_history = response['chat_history']
+                else:
+                    # If no chat_history in response, create or update it manually
+                    if not st.session_state.chat_history:
+                        st.session_state.chat_history = []
+                    st.session_state.chat_history.append({"role": "user", "content": user_question})
+                    st.session_state.chat_history.append({"role": "assistant", "content": response.get('answer', 'No response generated')})
 
-                for i, message in enumerate(st.session_state.chat_history):
-                    if i % 2 == 0:
-                        st.write(user_template.replace(
-                            "{{MSG}}", message.content), unsafe_allow_html=True)
-                    else:
-                        content = message.content
-                        # Check if response is too short or unhelpful
-                        if len(content.split()) < 5:
-                            content += "\n\n(Note: The model provided a very brief response. Try rephrasing your question or uploading more detailed documents for better results.)"
-                        st.write(bot_template.replace(
-                            "{{MSG}}", content), unsafe_allow_html=True)
+                # Display chat history
+                if isinstance(st.session_state.chat_history[0], dict):
+                    # Handle dict format
+                    for message in st.session_state.chat_history:
+                        if message["role"] == "user":
+                            st.write(user_template.replace(
+                                "{{MSG}}", message["content"]), unsafe_allow_html=True)
+                        else:
+                            content = message["content"]
+                            # Check if response is too short or unhelpful
+                            if len(content.split()) < 5:
+                                content += "\n\n(Note: The model provided a very brief response. Try rephrasing your question or uploading more detailed documents for better results.)"
+                            st.write(bot_template.replace(
+                                "{{MSG}}", content), unsafe_allow_html=True)
+                else:
+                    # Handle the original message format
+                    for i, message in enumerate(st.session_state.chat_history):
+                        if i % 2 == 0:
+                            st.write(user_template.replace(
+                                "{{MSG}}", message.content), unsafe_allow_html=True)
+                        else:
+                            content = message.content
+                            # Check if response is too short or unhelpful
+                            if len(content.split()) < 5:
+                                content += "\n\n(Note: The model provided a very brief response. Try rephrasing your question or uploading more detailed documents for better results.)"
+                            st.write(bot_template.replace(
+                                "{{MSG}}", content), unsafe_allow_html=True)
         except Exception as e:
             st.error(f"An error occurred while processing your question: {str(e)}")
             st.info("Try asking a simpler question or processing different documents.")
