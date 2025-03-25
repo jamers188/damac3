@@ -1,4 +1,3 @@
-
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -43,14 +42,24 @@ def get_text_chunks(text, chunk_size=1000, chunk_overlap=200):
 
 # get vector store method
 def get_vectorstore(text_chunks):
-
-    # embeddings = OpenAIEmbeddings(openai_api_key = openai_api_key)
-    embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
+    try:
+        # First attempt to use HuggingFaceInstructEmbeddings
+        from langchain_community.embeddings import HuggingFaceInstructEmbeddings
+        embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
+    except (ImportError, NameError) as e:
+        # Fallback to HuggingFaceEmbeddings if InstructEmbeddings fails
+        print(f"Error using HuggingFaceInstructEmbeddings: {e}")
+        print("Falling back to HuggingFaceEmbeddings...")
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    
+    # Create vector store with the chosen embeddings
+    from langchain_community.vectorstores import FAISS
     vector_store = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
-
-    print(type(vector_store))
-
+    
+    print(f"Vector store created with {type(embeddings).__name__}")
     return vector_store
+
 
 
 # get conversation chain method
