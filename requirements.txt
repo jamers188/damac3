@@ -1,7 +1,9 @@
 streamlit>=1.24.0
 python-dotenv>=1.0.0
 PyPDF2>=3.0.0
-langchain>=0.0.267
+langchain==0.0.267
+langchain-community==0.0.10
+langchain-openai==0.0.2
 faiss-cpu>=1.7.4
 openai>=0.27.8
 qdrant-client>=1.4.0
