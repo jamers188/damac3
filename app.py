@@ -1,133 +1,165 @@
-import streamlit as st
-import os
-from PyPDF2 import PdfReader
-import docx
-from langchain.chat_models import ChatOpenAI
-from langchain.llms import OpenAI
-from dotenv import load_dotenv
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
-from streamlit_chat import message
-from langchain.callbacks import get_openai_callback
 
+import os
+import streamlit as st
+from dotenv import load_dotenv
+from PyPDF2 import PdfReader
+from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings  # , HuggingFaceInstructEmbeddings
+from langchain.vectorstores import FAISS, Qdrant, Chroma
+from langchain.chat_models import ChatOpenAI
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from htmlTemplates import css, bot_template, user_template
+from langchain.llms import HuggingFaceHub, HuggingFacePipeline
+
+# load environment variables
+load_dotenv()
+openai_api_key = os.getenv("OPENAI_API_KEY")
+
+
+
+def get_pdf_text(pdf_file):
+    pdf_reader = PdfReader(pdf_file)
+    return "".join(page.extract_text() for page in pdf_reader.pages)
+
+
+# get text chunks method
+def get_text_chunks(text, chunk_size=1000, chunk_overlap=200):
+    text_chunks = []
+    position = 0
+    # Iterate over the text until the entire text has been processed
+    while position < len(text):
+        start_index = max(0, position - chunk_overlap)
+        end_index = position + chunk_size
+        chunk = text[start_index:end_index]
+        text_chunks.append(chunk)
+        position = end_index - chunk_overlap
+    return text_chunks
+
+
+# get vector store method
+def get_vectorstore(text_chunks):
+
+    # embeddings = OpenAIEmbeddings(openai_api_key = openai_api_key)
+    embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
+    vector_store = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+
+    print(type(vector_store))
+
+    return vector_store
+
+
+# get conversation chain method
+def get_conversation_chain(vectorstore):
+    model_prams = {"temperature": 0.23, "max_length": 4096}
+    llm = ChatOpenAI()
+
+    # Alternatively, you can use a different language model, like Hugging Face's model
+    # llm = HuggingFaceHub(repo_id="microsoft/phi-2", model_kwargs=model_prams)
+    print("Creating conversation chain...")
+    print("Conversation chain created")
+    memory = ConversationBufferMemory(
+        memory_key='chat_history', return_messages=True)
+
+    return ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),  # Text vector retriever for context matching
+        memory=memory,  # Memory buffer to store conversation history
+    )
+
+
+# get handler user input method
+def handle_userinput(user_question):
+    if st.session_state.conversation is not None:
+
+        response = st.session_state.conversation({'question': user_question})
+        st.session_state.chat_history = response['chat_history']
+
+        for i, message in enumerate(st.session_state.chat_history):
+            if i % 2 == 0:
+                st.write(user_template.replace(
+                    "{{MSG}}", message.content), unsafe_allow_html=True)
+            else:
+                st.write(bot_template.replace(
+                    "{{MSG}}", message.content), unsafe_allow_html=True)
+    else:
+        st.write("Please upload PDFs and click process")
 
 
 def main():
     load_dotenv()
-    st.set_page_config(page_title="Chat With files")
-    st.header("ChatPDF developed by [@Sabber_dev](https://x.com/sabber_dev)")
+    st.set_page_config(page_title="Chat with multiple PDFs",
+                       page_icon=":books:")
+    st.write(css, unsafe_allow_html=True)
 
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
-    if "processComplete" not in st.session_state:
-        st.session_state.processComplete = None
 
+    st.header("Chat with multiple PDFs :books:")
+    if user_question := st.text_input("Ask a question about your documents:"):
+        handle_userinput(user_question)
+
+    st.subheader("Model Parameters")
+
+    # init sidebar
     with st.sidebar:
-        uploaded_files =  st.file_uploader("Upload your file",type=['pdf','docx'],accept_multiple_files=True)
-        openai_api_key = st.text_input("OpenAI API Key", key="chatbot_api_key", type="password")
-        process = st.button("Process")
-    if process:
-        if not openai_api_key:
-            st.info("Please add your OpenAI API key to continue.")
-            st.stop()
-        files_text = get_files_text(uploaded_files)
-        text_chunks = get_text_chunks(files_text)
-        vetorestore = get_vectorstore(text_chunks)
-     
-        st.session_state.conversation = get_conversation_chain(vetorestore,openai_api_key) 
+        st.subheader("Your PDFs")
+        pdf_docs = st.file_uploader("Upload PDFs and click process", type="pdf", accept_multiple_files=True)
 
-        st.session_state.processComplete = True
-
-    if  st.session_state.processComplete == True:
-        user_question = st.chat_input("Chat with your file")
-        if user_question:
-            handel_userinput(user_question)
+        if st.button("Process"):
+            with st.spinner("Processing PDFs"):
+                process_files(pdf_docs, st)
 
 
+def process_files(file_list, st): 
 
-
-
-def get_files_text(uploaded_files):
-    text = ""
-    for uploaded_file in uploaded_files:
-        split_tup = os.path.splitext(uploaded_file.name)
-        file_extension = split_tup[1]
+    for file in file_list:
+        file_extension = os.path.splitext(file.name)[1]
+        file_name = os.path.splitext(file.name)[0]
         if file_extension == ".pdf":
-            text += get_pdf_text(uploaded_file)
-        elif file_extension == ".docx":
-            text += get_docx_text(uploaded_file)
+            raw_text = get_pdf_text(file)
+        elif file_extension == ".txt":
+            with open(file, 'r') as txt_file:
+                raw_text = txt_file.read()
+
+        elif file_extension == ".csv":
+            with open(file, 'r') as csv_file:
+                raw_text = csv_file.read()
+
         else:
-            text += get_csv_text(uploaded_file)
-    return text
+            raise Exception("File type not supported")
+
+    print(raw_text)
+    text_chunks = get_text_chunks(raw_text)
+    print(f'Number of text chunks: {len(text_chunks)}')
+    print("Creating vector store")
+    vector_store = get_vectorstore(text_chunks)
+    print("Vector store created")
+    print("Creating conversation chain")
+    st.session_state.conversation = get_conversation_chain(vector_store)
+    print("Conversation chain created")
 
 
-def get_pdf_text(pdf):
-    pdf_reader = PdfReader(pdf)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text()
-    return text
+def get_file_text(file_path_list):
+    raw_text = ""
+    for file_path in file_path_list:
+        file_extension = os.path.splitext(file_path)[1]
+        file_name = os.path.splitext(file_path)[0]
+        if file_extension == ".pdf":
+            raw_text += get_pdf_text(file_path)
+        elif file_extension == ".txt":
+            with open(file_path, 'r') as txt_file:
+                raw_text += txt_file.read()
 
-def get_docx_text(file):
-    doc = docx.Document(file)
-    allText = []
-    for docpara in doc.paragraphs:
-        allText.append(docpara.text)
-    text = ' '.join(allText)
-    return text
+        elif file_extension == ".csv":
+            with open(file_path, 'r') as csv_file:
+                raw_text += csv_file.read()
 
-def get_csv_text(file):
-    return "a"
+        else:
+            raise Exception("File type not supported")
 
-def get_text_chunks(text):
-    text_splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=900,
-        chunk_overlap=100,
-        length_function=len
-    )
-    chunks = text_splitter.split_text(text)
-    return chunks
-
-
-def get_vectorstore(text_chunks):
-    embeddings = HuggingFaceEmbeddings()
-    knowledge_base = FAISS.from_texts(text_chunks,embeddings)
-    return knowledge_base
-
-def get_conversation_chain(vetorestore,openai_api_key):
-    llm = ChatOpenAI(openai_api_key=openai_api_key, model_name = 'gpt-3.5-turbo',temperature=0)
-    memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vetorestore.as_retriever(),
-        memory=memory
-    )
-    return conversation_chain
-
-# This function takes a user question as input, sends it to a conversation model and displays the conversation history along with some additional information.
-def handel_userinput(user_question):
-
-    with get_openai_callback() as cb:
-        response = st.session_state.conversation({'question':user_question})
-    st.session_state.chat_history = response['chat_history']
-
-    response_container = st.container()
-
-    with response_container:
-        for i, messages in enumerate(st.session_state.chat_history):
-            if i % 2 == 0:
-                message(messages.content, is_user=True, key=str(i))
-            else:
-                message(messages.content, key=str(i))
-        st.write(f"Total Tokens: {cb.total_tokens}" f", Prompt Tokens: {cb.prompt_tokens}" f", Completion Tokens: {cb.completion_tokens}" f", Total Cost (USD): ${cb.total_cost}")
-
-
+    return raw_text
 
 
 if __name__ == '__main__':
