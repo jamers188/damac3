@@ -18,20 +18,76 @@ load_dotenv()
 
 def get_pdf_text(pdf_file):
     pdf_reader = PdfReader(pdf_file)
-    return "".join(page.extract_text() for page in pdf_reader.pages)
+    text = ""
+    for page_num, page in enumerate(pdf_reader.pages):
+        page_text = page.extract_text()
+        if page_text:
+            # Add page number reference to help with context
+            text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
+        else:
+            text += f"\n--- Page {page_num + 1} (No extractable text) ---\n"
+    return text
 
 
-# get text chunks method
+# get text chunks method with improved section handling
 def get_text_chunks(text, chunk_size=1000, chunk_overlap=200):
-    text_chunks = []
-    position = 0
-    # Iterate over the text until the entire text has been processed
-    while position < len(text):
-        start_index = max(0, position - chunk_overlap)
-        end_index = position + chunk_size
-        chunk = text[start_index:end_index]
-        text_chunks.append(chunk)
-        position = end_index - chunk_overlap
+    # Try to split by sections first to preserve section integrity
+    import re
+    
+    # Look for section headers like "SECTION 1:" or "Section 1:" etc.
+    section_pattern = re.compile(r'(?i)(SECTION\s+\d+[\s\-:]+.*?)(?=SECTION\s+\d+[\s\-:]+|$)')
+    sections = section_pattern.findall(text)
+    
+    if sections:
+        print(f"Found {len(sections)} sections in the document")
+        text_chunks = []
+        # Process each section as a chunk, or split further if too large
+        for section in sections:
+            if len(section) <= chunk_size:
+                text_chunks.append(section)
+            else:
+                # If a section is too large, split it while preserving the section header
+                header_match = re.match(r'(?i)(SECTION\s+\d+[\s\-:]+.*?)(\n|\r|\r\n)', section)
+                if header_match:
+                    header = header_match.group(1)
+                    content = section[len(header):]
+                    
+                    # Split the content into chunks
+                    pos = 0
+                    while pos < len(content):
+                        end_pos = min(pos + chunk_size, len(content))
+                        # First chunk includes header
+                        if pos == 0:
+                            text_chunks.append(header + content[pos:end_pos])
+                        else:
+                            # Other chunks get a reminder of which section they belong to
+                            text_chunks.append(f"(Continued from {header}) " + content[pos:end_pos])
+                        pos += chunk_size - chunk_overlap
+                else:
+                    # Fallback if header pattern isn't clear
+                    position = 0
+                    while position < len(section):
+                        start_index = max(0, position - chunk_overlap)
+                        end_index = position + chunk_size
+                        chunk = section[start_index:end_index]
+                        text_chunks.append(chunk)
+                        position = end_index - chunk_overlap
+    else:
+        # Fallback to original method if no sections found
+        print("No clear sections found, using standard chunking")
+        text_chunks = []
+        position = 0
+        while position < len(text):
+            start_index = max(0, position - chunk_overlap)
+            end_index = position + chunk_size
+            chunk = text[start_index:end_index]
+            text_chunks.append(chunk)
+            position = end_index - chunk_overlap
+            
+    # Print the first few characters of each chunk for debugging
+    for i, chunk in enumerate(text_chunks):
+        print(f"Chunk {i}: {chunk[:100]}...")
+            
     return text_chunks
 
 
@@ -202,28 +258,71 @@ def main():
 
 def process_files(file_list, st):
     raw_text = ""
+    
+    # Create expandable section to show extracted text for debugging
+    with st.expander("Document Processing Details", expanded=False):
+        text_area = st.empty()
 
     for file in file_list:
         file_extension = os.path.splitext(file.name)[1].lower()
         if file_extension == ".pdf":
             st.info(f"Processing {file.name}...")
             try:
-                raw_text += get_pdf_text(file)
+                extracted_text = get_pdf_text(file)
+                raw_text += extracted_text
+                
+                # Show first 1000 chars of extracted text for verification
+                text_area.text_area(
+                    f"Extracted Text Preview from {file.name} (first 1000 chars)",
+                    extracted_text[:1000] + "...",
+                    height=200
+                )
             except Exception as e:
                 st.warning(f"Could not process {file.name}: {str(e)}")
         elif file_extension == ".txt":
             st.info(f"Processing {file.name}...")
-            raw_text += file.getvalue().decode("utf-8")
+            extracted_text = file.getvalue().decode("utf-8")
+            raw_text += extracted_text
+            text_area.text_area(
+                f"Extracted Text Preview from {file.name} (first 1000 chars)",
+                extracted_text[:1000] + "...",
+                height=200
+            )
         elif file_extension == ".csv":
             st.info(f"Processing {file.name}...")
-            raw_text += file.getvalue().decode("utf-8")
+            extracted_text = file.getvalue().decode("utf-8")
+            raw_text += extracted_text
+            text_area.text_area(
+                f"Extracted Text Preview from {file.name} (first 1000 chars)",
+                extracted_text[:1000] + "...",
+                height=200
+            )
         else:
             st.error(f"File type {file_extension} not supported")
     
     if raw_text:
         st.success("Files processed successfully!")
+        
+        # Add a checkbox to enable section-specific processing
+        use_section_search = st.checkbox("Enable section-specific search (recommended for forms and structured documents)", value=True)
+        
+        if use_section_search:
+            # Look for sections in the text
+            import re
+            section_pattern = re.compile(r'(?i)(SECTION\s+\d+[\s\-:]+.*?)(?=SECTION\s+\d+[\s\-:]+|$)')
+            sections = section_pattern.findall(raw_text)
+            
+            if sections:
+                st.info(f"Found {len(sections)} sections in your document. You can search by section number.")
+                # Display section headers for reference
+                with st.expander("Document Sections Found", expanded=False):
+                    for i, section in enumerate(sections):
+                        # Extract just the header part
+                        header = section.split('\n')[0] if '\n' in section else section[:100]
+                        st.write(f"{i+1}. {header}")
+        
         text_chunks = get_text_chunks(raw_text)
-        st.info(f"Created {len(text_chunks)} text chunks")
+        st.info(f"Created {len(text_chunks)} text chunks for processing")
         
         with st.spinner("Creating knowledge base... This may take a few minutes."):
             vector_store = get_vectorstore(text_chunks)
